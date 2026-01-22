@@ -169,10 +169,32 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error(err);
-      const errorMessage = err.message?.includes('API Key') 
-        ? "API Key 无效或过期，请检查配置。" 
-        : (err.message || "出错了，请稍后重试。");
-      setError(errorMessage);
+      
+      let rawMsg = err.message || "";
+      let userMsg = "出错了，请稍后重试。";
+
+      // 尝试解析结构化错误
+      try {
+        const errorObj = JSON.parse(rawMsg);
+        if (errorObj.message) rawMsg = errorObj.message;
+        if (errorObj.status === 404) {
+          rawMsg = "Model not found";
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      const lowerMsg = rawMsg.toLowerCase();
+
+      if (lowerMsg.includes('api key') || lowerMsg.includes('403') || lowerMsg.includes('key not valid')) {
+        userMsg = "API Key 无效或受限。请检查 Key 是否正确，或是否设置了 Referrer 限制。";
+      } else if (lowerMsg.includes('not found') || lowerMsg.includes('404')) {
+        userMsg = "请求的模型不可用 (404)。可能是该模型在您所在的地区尚未开放。";
+      } else if (rawMsg) {
+        userMsg = `请求出错: ${rawMsg}`;
+      }
+
+      setError(userMsg);
       setStatus(AppStatus.ERROR);
     }
   };
@@ -194,9 +216,9 @@ const App: React.FC = () => {
       const finalPrompt = await generateFinalClarifiedPrompt(input, qaPairs, apiKey);
       setResult(finalPrompt);
       setStatus(AppStatus.COMPLETED);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("生成最终指令失败。");
+      setError(`生成最终指令失败: ${err.message || '未知错误'}`);
       setStatus(AppStatus.ERROR);
     }
   };

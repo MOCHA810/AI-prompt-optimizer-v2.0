@@ -6,9 +6,10 @@ import { ClarificationResponse, ClarificationQuestion } from "../types";
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
 // Helper to determine model based on task
-// 使用 System Instruction 推荐的模型
-const MODEL_FAST = 'gemini-3-flash-preview';
-const MODEL_SMART = 'gemini-3-pro-preview';
+// 使用当前最先进且公开可用的模型 Gemini 2.0 Flash
+// 它比 1.5 Pro 更快更强，且符合“不使用 1.5 Flash”的要求
+const MODEL_FAST = 'gemini-2.0-flash';
+const MODEL_SMART = 'gemini-2.0-flash'; 
 
 /**
  * 通用的 fetch 包装函数
@@ -19,7 +20,9 @@ async function callGeminiAPI(
   promptText: string,
   responseSchema?: any
 ): Promise<string> {
-  const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
+  // 移除可能导致 url 解析问题的空格
+  const cleanKey = apiKey.trim();
+  const url = `${BASE_URL}/models/${model}:generateContent?key=${cleanKey}`;
 
   const body: any = {
     contents: [{ parts: [{ text: promptText }] }],
@@ -37,25 +40,35 @@ async function callGeminiAPI(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      // 关键修复：避免在 Netlify 等环境下因 Referrer 策略导致 API Key 校验失败
+      // 如果 Key 没有设置 Referrer 限制，这通常能解决问题
+      referrerPolicy: 'no-referrer'
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      // 抛出详细错误供 App.tsx 捕获
-      throw new Error(errorData.error?.message || `API 请求失败: ${response.status} ${response.statusText}`);
+      // 提取最准确的错误信息
+      const backendMessage = errorData.error?.message;
+      const statusText = response.statusText;
+      
+      // 构造一个包含状态码的 Error，方便上层判断
+      throw new Error(JSON.stringify({
+        status: response.status,
+        message: backendMessage || `请求失败 (${response.status} ${statusText})`
+      }));
     }
 
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!text) {
-      throw new Error("AI 未返回任何文本内容");
+      throw new Error("AI 未返回任何文本内容 (Empty Response)");
     }
 
     return text;
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
+    console.error("Gemini API Error details:", error);
     throw error; // 继续抛出，让 UI 层处理
   }
 }
@@ -78,7 +91,6 @@ export const generateFastPrompt = async (userInput: string, apiKey: string): Pro
     "${userInput}"
   `;
 
-  // Basic Text Task -> gemini-3-flash-preview
   return callGeminiAPI(apiKey, MODEL_FAST, prompt);
 };
 
@@ -131,7 +143,6 @@ export const generateClarificationQuestions = async (userInput: string, apiKey: 
     required: ["questions"],
   };
 
-  // Complex Text Task -> gemini-3-pro-preview
   const text = await callGeminiAPI(apiKey, MODEL_SMART, prompt, schema);
 
   try {
@@ -139,7 +150,7 @@ export const generateClarificationQuestions = async (userInput: string, apiKey: 
     return json.questions || [];
   } catch (e) {
     console.error("JSON Parse Error", e);
-    throw new Error("解析澄清问题失败，请重试。");
+    throw new Error("解析澄清问题失败，AI 返回格式异常。");
   }
 };
 
@@ -171,6 +182,5 @@ export const generateFinalClarifiedPrompt = async (
     5. Do not explain your reasoning. Output ONLY the final prompt.
   `;
 
-  // Complex Text Task -> gemini-3-pro-preview
   return callGeminiAPI(apiKey, MODEL_SMART, prompt);
 };
