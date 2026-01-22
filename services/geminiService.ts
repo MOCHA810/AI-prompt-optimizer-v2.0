@@ -1,18 +1,16 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { ClarificationResponse, ClarificationQuestion } from "../types";
 
-const apiKey = process.env.API_KEY || '';
-
-// Initialize client only when needed to adhere to lifecycle best practices
-const getClient = () => new GoogleGenAI({ apiKey });
+// Initialize client with the provided key
+const getClient = (apiKey: string) => new GoogleGenAI({ apiKey });
 
 // Helper to determine model based on complexity
 const MODEL_FAST = 'gemini-3-flash-preview';
 const MODEL_SMART = 'gemini-3-pro-preview';
 
-export const generateFastPrompt = async (userInput: string): Promise<string> => {
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = getClient();
+export const generateFastPrompt = async (userInput: string, apiKey: string): Promise<string> => {
+  if (!apiKey) throw new Error("缺少 API Key");
+  const ai = getClient(apiKey);
 
   const prompt = `
     Act as an expert prompt engineer. 
@@ -37,9 +35,9 @@ export const generateFastPrompt = async (userInput: string): Promise<string> => 
   return response.text || "无法生成指令。";
 };
 
-export const generateClarificationQuestions = async (userInput: string): Promise<ClarificationQuestion[]> => {
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = getClient();
+export const generateClarificationQuestions = async (userInput: string, apiKey: string): Promise<ClarificationQuestion[]> => {
+  if (!apiKey) throw new Error("缺少 API Key");
+  const ai = getClient(apiKey);
 
   const prompt = `
     Analyze the following user input for an AI task. 
@@ -94,23 +92,24 @@ export const generateClarificationQuestions = async (userInput: string): Promise
   });
 
   const text = response.text;
-  if (!text) throw new Error("No response from AI");
+  if (!text) throw new Error("AI 未返回内容");
 
   try {
     const json = JSON.parse(text) as ClarificationResponse;
     return json.questions;
   } catch (e) {
     console.error("JSON Parse Error", e);
-    throw new Error("Failed to parse clarification questions.");
+    throw new Error("解析澄清问题失败。");
   }
 };
 
 export const generateFinalClarifiedPrompt = async (
   originalInput: string,
-  qaPairs: { question: string; answer: string }[]
+  qaPairs: { question: string; answer: string }[],
+  apiKey: string
 ): Promise<string> => {
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = getClient();
+  if (!apiKey) throw new Error("缺少 API Key");
+  const ai = getClient(apiKey);
 
   const qaContext = qaPairs.map(qa => `Q: ${qa.question}\nChoice: ${qa.answer}`).join("\n\n");
 

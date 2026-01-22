@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Copy, Check, ArrowRight, RefreshCw, Sparkles } from 'lucide-react';
+import { Copy, Check, ArrowRight, RefreshCw, Sparkles, AlertTriangle } from 'lucide-react';
 import { AppMode, AppStatus, ClarificationQuestion } from './types';
 import { generateFastPrompt, generateClarificationQuestions, generateFinalClarifiedPrompt } from './services/geminiService';
 import GlassButton from './components/GlassButton';
 import ModeToggle from './components/ModeToggle';
+import ApiKeyConfig from './components/ApiKeyConfig';
 
 const App: React.FC = () => {
   // State
+  const [apiKey, setApiKey] = useState<string>('');
   const [mode, setMode] = useState<AppMode>(AppMode.FAST);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -40,6 +42,11 @@ const App: React.FC = () => {
 
   const handleGenerate = async () => {
     if (!input.trim()) return;
+    if (!apiKey) {
+      setError("请先配置 Google API Key");
+      return;
+    }
+
     setError(null);
     setResult('');
     setCopied(false);
@@ -47,25 +54,33 @@ const App: React.FC = () => {
     try {
       if (mode === AppMode.FAST) {
         setStatus(AppStatus.GENERATING_RESULT);
-        const prompt = await generateFastPrompt(input);
+        const prompt = await generateFastPrompt(input, apiKey);
         setResult(prompt);
         setStatus(AppStatus.COMPLETED);
       } else {
         // Clarify Mode Step 1
         setStatus(AppStatus.GENERATING_QUESTIONS);
-        const generatedQuestions = await generateClarificationQuestions(input);
+        const generatedQuestions = await generateClarificationQuestions(input, apiKey);
         setQuestions(generatedQuestions);
         // Pre-select first options to avoid validation friction? No, explicitly ask user.
         setStatus(AppStatus.AWAITING_INPUT);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("出错了，请稍后重试。");
+      const errorMessage = err.message?.includes('API Key') 
+        ? "API Key 无效或过期，请检查配置。" 
+        : "出错了，请稍后重试。";
+      setError(errorMessage);
       setStatus(AppStatus.ERROR);
     }
   };
 
   const handleClarificationSubmit = async () => {
+    if (!apiKey) {
+      setError("API Key 丢失，请重新配置");
+      return;
+    }
+    
     try {
       setStatus(AppStatus.GENERATING_RESULT);
       
@@ -74,7 +89,7 @@ const App: React.FC = () => {
         answer: answers[q.id] || q.options[0].value // Fallback safety
       }));
 
-      const finalPrompt = await generateFinalClarifiedPrompt(input, qaPairs);
+      const finalPrompt = await generateFinalClarifiedPrompt(input, qaPairs, apiKey);
       setResult(finalPrompt);
       setStatus(AppStatus.COMPLETED);
     } catch (err) {
@@ -117,17 +132,22 @@ const App: React.FC = () => {
       {/* Main Glass Container - Using bg-glass-surface from config but ensuring overrides if needed for extra transparency */}
       <main className="w-full max-w-3xl bg-glass-surface backdrop-blur-2xl border border-glass-border shadow-glass rounded-[40px] p-6 sm:p-10 transition-all duration-500">
         
-        {/* Header */}
-        <div className="flex flex-col items-center mb-8 text-center">
-          <div className="w-12 h-12 bg-gradient-to-tr from-slate-100 to-white/40 rounded-2xl shadow-sm border border-white/30 flex items-center justify-center mb-4 backdrop-blur-md">
+        {/* Header Section including API Config */}
+        <div className="flex flex-col items-center mb-8 text-center relative z-10">
+          {/* Logo */}
+          <div className="w-12 h-12 bg-gradient-to-tr from-slate-100 to-white/40 rounded-2xl shadow-sm border border-white/30 flex items-center justify-center mb-6 backdrop-blur-md">
             <Sparkles className="text-slate-500" size={24} strokeWidth={1.5} />
           </div>
+          
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 mb-2">优化你的想法</h1>
-          <p className="text-slate-500 font-normal">将零散的想法转化为精准的 AI 指令。</p>
+          <p className="text-slate-500 font-normal mb-8">将零散的想法转化为精准的 AI 指令。</p>
+
+          {/* API Config Module */}
+          <ApiKeyConfig onApiKeyChange={setApiKey} />
         </div>
 
         {/* Mode Toggle */}
-        <div className="flex justify-center mb-8">
+        <div className="flex justify-center mb-8 relative z-0">
           <ModeToggle 
             currentMode={mode} 
             onModeChange={handleModeChange} 
@@ -152,12 +172,20 @@ const App: React.FC = () => {
           </div>
 
           {/* Action Area */}
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end pt-2 items-center gap-4">
+            {!apiKey && (
+               <span className="text-xs text-amber-600/80 font-medium flex items-center gap-1.5 px-3 py-1 bg-amber-50/50 rounded-full border border-amber-100/50">
+                 <AlertTriangle size={12} />
+                 请先输入 API Key
+               </span>
+            )}
+
             {status === AppStatus.IDLE || status === AppStatus.COMPLETED || status === AppStatus.ERROR ? (
               <GlassButton 
                 onClick={handleGenerate} 
-                disabled={!input.trim()}
+                disabled={!input.trim() || !apiKey}
                 isLoading={isBusy}
+                className={!apiKey ? 'opacity-50 grayscale cursor-not-allowed' : ''}
               >
                 {status === AppStatus.COMPLETED ? '再次优化' : '生成指令'}
                 {status !== AppStatus.COMPLETED && <ArrowRight size={16} />}
