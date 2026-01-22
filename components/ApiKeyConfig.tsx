@@ -16,9 +16,6 @@ const ApiKeyConfig: React.FC<ApiKeyConfigProps> = ({ onApiKeyChange }) => {
     if (storedKey) {
       setKey(storedKey);
       onApiKeyChange(storedKey);
-    } else {
-        // If no key exists, maybe we want to hint the user, but keep it collapsed to respect the "clean" request
-        // The parent component handles the blocking logic.
     }
   }, [onApiKeyChange]);
 
@@ -32,9 +29,8 @@ const ApiKeyConfig: React.FC<ApiKeyConfigProps> = ({ onApiKeyChange }) => {
   const hasKey = key.length > 0;
 
   return (
-    <div className="w-full flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-700">
+    <div className="w-full flex flex-col items-center animate-fade-in">
       
-      {/* Trigger Button */}
       <button 
         onClick={() => setIsOpen(!isOpen)}
         className={`
@@ -44,13 +40,13 @@ const ApiKeyConfig: React.FC<ApiKeyConfigProps> = ({ onApiKeyChange }) => {
             ? 'bg-slate-200/30 text-slate-500 border-slate-200/50 hover:bg-slate-200/50 hover:text-slate-700' 
             : 'bg-amber-50/80 text-amber-600 border-amber-200/50 hover:bg-amber-100/80 shadow-sm'}
         `}
+        type="button"
       >
         {hasKey ? <Settings size={12} /> : <Key size={12} />}
         <span>{hasKey ? 'API 设置' : '配置 Google API Key'}</span>
         {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
       </button>
 
-      {/* Collapsible Content */}
       <div 
         className={`
           w-full max-w-lg overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]
@@ -66,7 +62,6 @@ const ApiKeyConfig: React.FC<ApiKeyConfigProps> = ({ onApiKeyChange }) => {
         >
           <div className="flex items-center p-2 gap-3">
             
-            {/* Input Area */}
             <div className="flex-1 relative">
               <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
                 <Key size={14} />
@@ -86,13 +81,13 @@ const ApiKeyConfig: React.FC<ApiKeyConfigProps> = ({ onApiKeyChange }) => {
                 onClick={() => setIsVisible(!isVisible)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
                 title={isVisible ? "隐藏" : "显示"}
+                type="button"
               >
                 {isVisible ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
             </div>
           </div>
 
-          {/* Footer Note */}
           <div className="bg-white/20 border-t border-white/20 px-3 py-1.5 flex items-center justify-center gap-1.5 text-[10px] text-slate-500">
              <ShieldCheck size={10} className="text-slate-400" />
              <span>Key 仅存储于本地浏览器，直接请求 Google 接口</span>

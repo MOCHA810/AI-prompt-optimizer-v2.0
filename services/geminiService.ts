@@ -1,16 +1,67 @@
-import { GoogleGenAI, Type } from "@google/genai";
 import { ClarificationResponse, ClarificationQuestion } from "../types";
 
-// Initialize client with the provided key
-const getClient = (apiKey: string) => new GoogleGenAI({ apiKey });
+// 使用原生 fetch 替代 SDK，以避免浏览器环境下的版本和兼容性问题
+// 原生 fetch 更轻量且在纯前端环境更稳定
 
-// Helper to determine model based on complexity
+const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+
+// Helper to determine model based on task
+// 使用 System Instruction 推荐的模型
 const MODEL_FAST = 'gemini-3-flash-preview';
 const MODEL_SMART = 'gemini-3-pro-preview';
 
+/**
+ * 通用的 fetch 包装函数
+ */
+async function callGeminiAPI(
+  apiKey: string,
+  model: string,
+  promptText: string,
+  responseSchema?: any
+): Promise<string> {
+  const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
+
+  const body: any = {
+    contents: [{ parts: [{ text: promptText }] }],
+    generationConfig: {}
+  };
+
+  if (responseSchema) {
+    body.generationConfig.responseMimeType = "application/json";
+    body.generationConfig.responseSchema = responseSchema;
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      // 抛出详细错误供 App.tsx 捕获
+      throw new Error(errorData.error?.message || `API 请求失败: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      throw new Error("AI 未返回任何文本内容");
+    }
+
+    return text;
+  } catch (error: any) {
+    console.error("Gemini API Error:", error);
+    throw error; // 继续抛出，让 UI 层处理
+  }
+}
+
 export const generateFastPrompt = async (userInput: string, apiKey: string): Promise<string> => {
   if (!apiKey) throw new Error("缺少 API Key");
-  const ai = getClient(apiKey);
 
   const prompt = `
     Act as an expert prompt engineer. 
@@ -27,17 +78,12 @@ export const generateFastPrompt = async (userInput: string, apiKey: string): Pro
     "${userInput}"
   `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_FAST,
-    contents: prompt,
-  });
-
-  return response.text || "无法生成指令。";
+  // Basic Text Task -> gemini-3-flash-preview
+  return callGeminiAPI(apiKey, MODEL_FAST, prompt);
 };
 
 export const generateClarificationQuestions = async (userInput: string, apiKey: string): Promise<ClarificationQuestion[]> => {
   if (!apiKey) throw new Error("缺少 API Key");
-  const ai = getClient(apiKey);
 
   const prompt = `
     Analyze the following user input for an AI task. 
@@ -51,55 +97,49 @@ export const generateClarificationQuestions = async (userInput: string, apiKey: 
     2. Questions must be high-level strategic (e.g., Tone, Depth, Format), not trivial.
     3. Options must be mutually exclusive and significantly distinct.
     4. ALL text (questions and options) MUST be in Simplified Chinese.
-    5. Return valid JSON only.
+    5. Return valid JSON only with keys: "id", "text", "options" (array of "id", "label", "value").
   `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_SMART,
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          questions: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                text: { type: Type.STRING },
-                options: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      label: { type: Type.STRING },
-                      value: { type: Type.STRING },
-                    },
-                    required: ["id", "label", "value"],
-                  },
+  // Schema for structured output
+  const schema = {
+    type: "OBJECT",
+    properties: {
+      questions: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            id: { type: "STRING" },
+            text: { type: "STRING" },
+            options: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  id: { type: "STRING" },
+                  label: { type: "STRING" },
+                  value: { type: "STRING" },
                 },
+                required: ["id", "label", "value"],
               },
-              required: ["id", "text", "options"],
             },
           },
+          required: ["id", "text", "options"],
         },
-        required: ["questions"],
       },
     },
-  });
+    required: ["questions"],
+  };
 
-  const text = response.text;
-  if (!text) throw new Error("AI 未返回内容");
+  // Complex Text Task -> gemini-3-pro-preview
+  const text = await callGeminiAPI(apiKey, MODEL_SMART, prompt, schema);
 
   try {
     const json = JSON.parse(text) as ClarificationResponse;
-    return json.questions;
+    return json.questions || [];
   } catch (e) {
     console.error("JSON Parse Error", e);
-    throw new Error("解析澄清问题失败。");
+    throw new Error("解析澄清问题失败，请重试。");
   }
 };
 
@@ -109,7 +149,6 @@ export const generateFinalClarifiedPrompt = async (
   apiKey: string
 ): Promise<string> => {
   if (!apiKey) throw new Error("缺少 API Key");
-  const ai = getClient(apiKey);
 
   const qaContext = qaPairs.map(qa => `Q: ${qa.question}\nChoice: ${qa.answer}`).join("\n\n");
 
@@ -132,10 +171,6 @@ export const generateFinalClarifiedPrompt = async (
     5. Do not explain your reasoning. Output ONLY the final prompt.
   `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_SMART,
-    contents: prompt,
-  });
-
-  return response.text || "无法生成最终指令。";
+  // Complex Text Task -> gemini-3-pro-preview
+  return callGeminiAPI(apiKey, MODEL_SMART, prompt);
 };

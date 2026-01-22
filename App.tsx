@@ -6,6 +6,111 @@ import GlassButton from './components/GlassButton';
 import ModeToggle from './components/ModeToggle';
 import ApiKeyConfig from './components/ApiKeyConfig';
 
+// --- Sub-Components to keep Main Render Clean ---
+
+const ClarificationView: React.FC<{
+  questions: ClarificationQuestion[];
+  answers: Record<string, string>;
+  onAnswer: (qId: string, val: string) => void;
+  onSubmit: () => void;
+}> = ({ questions, answers, onAnswer, onSubmit }) => {
+  const isReady = questions.length > 0 && Object.keys(answers).length >= questions.length;
+
+  return (
+    <div className="mt-10 animate-fade-in">
+      <div className="flex items-center gap-3 mb-6 px-1">
+        <div className="h-px bg-slate-200/50 flex-1"></div>
+        <span className="text-xs font-medium text-slate-400 uppercase tracking-widest">需要澄清</span>
+        <div className="h-px bg-slate-200/50 flex-1"></div>
+      </div>
+
+      <p className="text-slate-600 text-center mb-8 px-4">
+        我们已为你补全了大部分细节，请确认以下 {questions.length} 个关键点。
+      </p>
+
+      <div className="space-y-8">
+        {questions.map((q) => (
+          <div key={q.id} className="bg-white/10 rounded-3xl p-6 border border-white/20 backdrop-blur-sm">
+            <h3 className="text-md font-medium text-slate-900 mb-4">{q.text}</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {q.options.map((opt) => {
+                const isSelected = answers[q.id] === opt.value;
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => onAnswer(q.id, opt.value)}
+                    className={`
+                      relative px-4 py-3 rounded-xl text-sm text-left transition-all duration-200 border
+                      ${isSelected 
+                        ? 'bg-white/60 border-slate-200/50 shadow-sm text-slate-900' 
+                        : 'bg-transparent border-transparent hover:bg-white/20 text-slate-600'}
+                    `}
+                    type="button"
+                  >
+                    {opt.label}
+                    {isSelected && (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-800">
+                        <Check size={14} />
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex justify-end mt-8">
+        <GlassButton onClick={onSubmit} disabled={!isReady}>
+          生成最终指令 <ArrowRight size={16} />
+        </GlassButton>
+      </div>
+    </div>
+  );
+};
+
+const ResultView: React.FC<{
+  result: string;
+  copied: boolean;
+  onCopy: () => void;
+  onReset: () => void;
+}> = ({ result, copied, onCopy, onReset }) => {
+  return (
+    <div className="mt-12 pt-10 border-t border-slate-200/40 animate-slide-up">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">优化后的指令</h3>
+        <div className="flex gap-2">
+          <button 
+            onClick={onReset}
+            className="p-2 text-slate-400 hover:text-slate-600 transition-colors rounded-full hover:bg-white/30"
+            title="重新开始"
+            type="button"
+          >
+            <RefreshCw size={16} />
+          </button>
+          <button 
+            onClick={onCopy}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${copied ? 'bg-emerald-100/80 text-emerald-700' : 'bg-slate-100/50 text-slate-600 hover:bg-slate-200/50'}`}
+            type="button"
+          >
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+            {copied ? '已复制' : '复制'}
+          </button>
+        </div>
+      </div>
+      
+      <div className="bg-white/30 backdrop-blur-md rounded-2xl border border-white/30 p-6 shadow-sm overflow-hidden relative">
+        <div className="prose prose-slate prose-sm max-w-none text-slate-800 leading-relaxed whitespace-pre-wrap font-sans">
+          {result}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- Main App Component ---
+
 const App: React.FC = () => {
   // State
   const [apiKey, setApiKey] = useState<string>('');
@@ -30,7 +135,6 @@ const App: React.FC = () => {
   const handleModeChange = (newMode: AppMode) => {
     if (status !== AppStatus.IDLE && status !== AppStatus.COMPLETED) return;
     setMode(newMode);
-    // Reset transient states but keep input if possible
     setQuestions([]);
     setAnswers({});
     setError(null);
@@ -58,18 +162,16 @@ const App: React.FC = () => {
         setResult(prompt);
         setStatus(AppStatus.COMPLETED);
       } else {
-        // Clarify Mode Step 1
         setStatus(AppStatus.GENERATING_QUESTIONS);
         const generatedQuestions = await generateClarificationQuestions(input, apiKey);
         setQuestions(generatedQuestions);
-        // Pre-select first options to avoid validation friction? No, explicitly ask user.
         setStatus(AppStatus.AWAITING_INPUT);
       }
     } catch (err: any) {
       console.error(err);
       const errorMessage = err.message?.includes('API Key') 
         ? "API Key 无效或过期，请检查配置。" 
-        : "出错了，请稍后重试。";
+        : (err.message || "出错了，请稍后重试。");
       setError(errorMessage);
       setStatus(AppStatus.ERROR);
     }
@@ -86,7 +188,7 @@ const App: React.FC = () => {
       
       const qaPairs = questions.map(q => ({
         question: q.text,
-        answer: answers[q.id] || q.options[0].value // Fallback safety
+        answer: answers[q.id] || q.options[0].value
       }));
 
       const finalPrompt = await generateFinalClarifiedPrompt(input, qaPairs, apiKey);
@@ -97,6 +199,10 @@ const App: React.FC = () => {
       setError("生成最终指令失败。");
       setStatus(AppStatus.ERROR);
     }
+  };
+
+  const handleAnswer = (qId: string, val: string) => {
+    setAnswers(prev => ({ ...prev, [qId]: val }));
   };
 
   const copyToClipboard = () => {
@@ -114,7 +220,7 @@ const App: React.FC = () => {
     setInput('');
   };
 
-  // Effects for scrolling
+  // Effects
   useEffect(() => {
     if (status === AppStatus.AWAITING_INPUT && questionsRef.current) {
       questionsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -126,15 +232,14 @@ const App: React.FC = () => {
 
   const isBusy = status === AppStatus.GENERATING_QUESTIONS || status === AppStatus.GENERATING_RESULT;
 
+  // Render
   return (
     <div className="min-h-screen flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8 selection:bg-slate-200 text-slate-800">
       
-      {/* Main Glass Container - Using bg-glass-surface from config but ensuring overrides if needed for extra transparency */}
       <main className="w-full max-w-3xl bg-glass-surface backdrop-blur-2xl border border-glass-border shadow-glass rounded-[40px] p-6 sm:p-10 transition-all duration-500 mb-8">
         
-        {/* Header Section */}
+        {/* Header */}
         <div className="flex flex-col items-center mb-8 text-center relative z-10">
-          {/* Logo */}
           <div className="w-12 h-12 bg-gradient-to-tr from-slate-100 to-white/40 rounded-2xl shadow-sm border border-white/30 flex items-center justify-center mb-6 backdrop-blur-md">
             <Sparkles className="text-slate-500" size={24} strokeWidth={1.5} />
           </div>
@@ -162,13 +267,8 @@ const App: React.FC = () => {
               onChange={(e) => setInput(e.target.value)}
               disabled={isBusy || (status === AppStatus.AWAITING_INPUT)}
             />
-            {/* Minimal Corner Gradient Hint */}
-            <div className="absolute top-0 right-0 p-6 pointer-events-none opacity-0 group-focus-within:opacity-100 transition-opacity duration-500">
-              <div className="w-2 h-2 rounded-full bg-slate-400/30"></div>
-            </div>
           </div>
 
-          {/* Action Area */}
           <div className="flex justify-end pt-2 items-center gap-4">
             {!apiKey && (
                <span className="text-xs text-amber-600/80 font-medium flex items-center gap-1.5 px-3 py-1 bg-amber-50/50 rounded-full border border-amber-100/50">
@@ -191,59 +291,15 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Clarification Section (Conditional) */}
+        {/* Clarification Section */}
         {status === AppStatus.AWAITING_INPUT && (
-          <div ref={questionsRef} className="mt-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex items-center gap-3 mb-6 px-1">
-              <div className="h-px bg-slate-200/50 flex-1"></div>
-              <span className="text-xs font-medium text-slate-400 uppercase tracking-widest">需要澄清</span>
-              <div className="h-px bg-slate-200/50 flex-1"></div>
-            </div>
-
-            <p className="text-slate-600 text-center mb-8 px-4">
-              我们已为你补全了大部分细节，请确认以下 {questions.length} 个关键点。
-            </p>
-
-            <div className="space-y-8">
-              {questions.map((q) => (
-                <div key={q.id} className="bg-white/10 rounded-3xl p-6 border border-white/20 backdrop-blur-sm">
-                  <h3 className="text-md font-medium text-slate-900 mb-4">{q.text}</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {q.options.map((opt) => {
-                      const isSelected = answers[q.id] === opt.value;
-                      return (
-                        <button
-                          key={opt.id}
-                          onClick={() => setAnswers(prev => ({ ...prev, [q.id]: opt.value }))}
-                          className={`
-                            relative px-4 py-3 rounded-xl text-sm text-left transition-all duration-200 border
-                            ${isSelected 
-                              ? 'bg-white/60 border-slate-200/50 shadow-sm text-slate-900' 
-                              : 'bg-transparent border-transparent hover:bg-white/20 text-slate-600'}
-                          `}
-                        >
-                          {opt.label}
-                          {isSelected && (
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-800">
-                              <Check size={14} />
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex justify-end mt-8">
-              <GlassButton 
-                onClick={handleClarificationSubmit}
-                disabled={Object.keys(answers).length < questions.length}
-              >
-                生成最终指令 <ArrowRight size={16} />
-              </GlassButton>
-            </div>
+          <div ref={questionsRef}>
+            <ClarificationView 
+              questions={questions}
+              answers={answers}
+              onAnswer={handleAnswer}
+              onSubmit={handleClarificationSubmit}
+            />
           </div>
         )}
 
@@ -256,43 +312,22 @@ const App: React.FC = () => {
 
         {/* Result Section */}
         {status === AppStatus.COMPLETED && result && (
-          <div ref={resultRef} className="mt-12 pt-10 border-t border-slate-200/40 animate-in fade-in slide-in-from-bottom-8 duration-700">
-             <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">优化后的指令</h3>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={handleReset}
-                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors rounded-full hover:bg-white/30"
-                    title="重新开始"
-                  >
-                    <RefreshCw size={16} />
-                  </button>
-                  <button 
-                    onClick={copyToClipboard}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${copied ? 'bg-emerald-100/80 text-emerald-700' : 'bg-slate-100/50 text-slate-600 hover:bg-slate-200/50'}`}
-                  >
-                    {copied ? <Check size={12} /> : <Copy size={12} />}
-                    {copied ? '已复制' : '复制'}
-                  </button>
-                </div>
-             </div>
-             
-             <div className="bg-white/30 backdrop-blur-md rounded-2xl border border-white/30 p-6 shadow-sm overflow-hidden relative">
-                <div className="prose prose-slate prose-sm max-w-none text-slate-800 leading-relaxed whitespace-pre-wrap font-sans">
-                  {result}
-                </div>
-             </div>
+          <div ref={resultRef}>
+            <ResultView 
+              result={result}
+              copied={copied}
+              onCopy={copyToClipboard}
+              onReset={handleReset}
+            />
           </div>
         )}
 
       </main>
 
-      {/* API Config Module - Moved to Bottom */}
       <div className="w-full max-w-3xl px-4 sm:px-10 mb-8 z-10">
         <ApiKeyConfig onApiKeyChange={setApiKey} />
       </div>
 
-      {/* Footer */}
       <footer className="text-center text-slate-400 text-xs pb-12">
         <p>由 Gemini 驱动。为清晰而设计。</p>
       </footer>
