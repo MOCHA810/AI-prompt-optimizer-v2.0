@@ -1,113 +1,86 @@
 // netlify/functions/api.js
-// 运行环境：Node.js 18+ (Netlify Default)
-// 功能：作为中间层代理，隐藏 API Key，处理 CORS，组装 Prompt
+// Serverless Backend for Clarity App
+// Environment: Node.js 18+
+// Env Vars Required: API_KEY
 
+// 根据最新的 Google GenAI 指南，使用 gemini-3-flash-preview 处理此类文本任务
+const MODEL_NAME = 'gemini-3-flash-preview';
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-// 使用目前公开可用的 Gemini 2.0 Flash Experimental 版本
-// 如果该模型不可用，可回退至 'gemini-1.5-pro'
-const MODEL_NAME = 'gemini-2.0-flash-exp';
 
 /**
- * 核心调用函数：后端负责与 Google 通信
+ * 辅助函数：构造 Google API 请求体
  */
-async function callGemini(apiKey, prompt, schema = null) {
-  const url = `${BASE_URL}/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
-  
+function buildRequestBody(prompt, schema = null) {
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
-      temperature: 0.7
+      temperature: 0.7,
+      // 如果提供了 Schema，强制模型输出 JSON
+      responseMimeType: schema ? "application/json" : "text/plain",
     }
   };
 
   if (schema) {
-    body.generationConfig.responseMimeType = "application/json";
     body.generationConfig.responseSchema = schema;
   }
 
-  // 使用 Node.js 原生 fetch (Node 18+)
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
-    // 透传 Google 的错误信息，但在前端显示时会脱敏
-    throw new Error(errData.error?.message || `Google API Error: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  
-  if (!text) {
-    throw new Error("AI returned empty response");
-  }
-
-  return text;
+  return body;
 }
 
+/**
+ * 核心业务逻辑
+ */
 exports.handler = async function(event, context) {
-  // 1. 安全检查：仅允许 POST
+  // 1. 安全与请求校验
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  // 2. 环境检查：获取 API Key
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    console.error("Critical Error: API_KEY is missing in Netlify Environment Variables.");
+    console.error("Critical: API_KEY is missing in server environment.");
     return {
       statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "Server Configuration Error: API Key not found." })
+      body: JSON.stringify({ message: "Server configuration error (Missing API Key)." })
     };
   }
 
   try {
-    // 3. 解析请求
-    if (!event.body) throw new Error("Missing request body");
     const { action, input, qaPairs } = JSON.parse(event.body);
 
-    if (!input) throw new Error("Missing 'input' field");
+    if (!input || typeof input !== 'string') {
+      return { statusCode: 400, body: JSON.stringify({ message: "Invalid input." }) };
+    }
 
-    let resultText = "";
-    let resultJson = null;
+    // 2. 路由与 Prompt 构建
+    let systemPrompt = "";
+    let schema = null;
 
-    // 4. 路由逻辑：根据 action 执行不同的 Prompt 工程
-    // --- 快速模式 ---
     if (action === 'fast') {
-      const prompt = `
-        Act as an expert prompt engineer. 
-        Transform the following raw user input into a single, high-quality, structured AI prompt in Simplified Chinese.
-        
-        Raw Input: "${input}"
+      // 快速模式：直接优化
+      systemPrompt = `
+        You are an expert prompt engineer. Your task is to transform the user's raw, unstructured idea into a single, high-quality, professional AI prompt in Simplified Chinese.
         
         Rules:
-        1. Output ONLY the optimized prompt. No chat.
-        2. Professional, neutral tone.
-        3. Structure clearly.
-      `;
-      resultText = await callGemini(apiKey, prompt);
-    } 
-    
-    // --- 澄清模式：生成问题 ---
-    else if (action === 'clarify_questions') {
-      const prompt = `
-        Analyze this input: "${input}"
-        Identify up to 3 ambiguous strategic decisions.
-        Generate 2-3 multiple choice questions in Simplified Chinese to clarify direction.
+        1. Keep the intent of the original input.
+        2. Add necessary structure, context, and tone.
+        3. Do NOT output any conversational text. ONLY output the optimized prompt.
+        4. If the input is too short, expand it reasonably.
         
-        Output JSON format:
-        {
-          "questions": [
-            { "id": "q1", "text": "Question?", "options": [{ "id": "o1", "label": "Label", "value": "Value" }] }
-          ]
-        }
+        Raw Input: "${input}"
       `;
-      
-      const schema = {
+    } 
+    else if (action === 'clarify_questions') {
+      // 澄清模式第一步：生成问题 (强制 JSON 结构)
+      systemPrompt = `
+        Analyze the following user idea: "${input}"
+        Identify 2-3 key ambiguities or missing details that would make the prompt better if clarified.
+        Generate 2-3 multiple-choice questions to ask the user.
+        
+        Output MUST be valid JSON matching the schema.
+      `;
+
+      schema = {
         type: "OBJECT",
         properties: {
           questions: {
@@ -116,15 +89,15 @@ exports.handler = async function(event, context) {
               type: "OBJECT",
               properties: {
                 id: { type: "STRING" },
-                text: { type: "STRING" },
+                text: { type: "STRING", description: "The question text in Chinese" },
                 options: {
                   type: "ARRAY",
                   items: {
                     type: "OBJECT",
                     properties: {
                       id: { type: "STRING" },
-                      label: { type: "STRING" },
-                      value: { type: "STRING" }
+                      label: { type: "STRING", description: "Option label in Chinese" },
+                      value: { type: "STRING", description: "The value to use in the final prompt" }
                     },
                     required: ["id", "label", "value"]
                   }
@@ -136,55 +109,72 @@ exports.handler = async function(event, context) {
         },
         required: ["questions"]
       };
-
-      resultText = await callGemini(apiKey, prompt, schema);
-      
-      try {
-        resultJson = JSON.parse(resultText);
-      } catch (e) {
-        console.error("JSON Parse Fail", resultText);
-        throw new Error("AI failed to return valid JSON");
-      }
-    }
-
-    // --- 澄清模式：最终生成 ---
-    else if (action === 'clarify_final') {
-      const qaContext = (qaPairs || []).map(qa => `Q: ${qa.question}\nSelected: ${qa.answer}`).join("\n\n");
-      const prompt = `
-        Act as an expert prompt engineer.
-        Create a final optimized prompt based on Input and Strategic Choices.
-        
-        Input: "${input}"
-        Choices:
-        ${qaContext}
-        
-        Output Simplified Chinese prompt only. Markdown format.
-      `;
-      resultText = await callGemini(apiKey, prompt);
     } 
-    
+    else if (action === 'clarify_final') {
+      // 澄清模式第二步：最终生成
+      const contextStr = (qaPairs || []).map(qa => `Question: ${qa.question}\nUser Choice: ${qa.answer}`).join("\n\n");
+      systemPrompt = `
+        You are an expert prompt engineer.
+        Construct a final, highly optimized prompt based on the user's original idea and their clarification choices.
+        
+        Original Idea: "${input}"
+        
+        Clarifications:
+        ${contextStr}
+        
+        Output:
+        Return ONLY the final optimized prompt in Simplified Chinese. No markdown code blocks unless requested.
+      `;
+    } 
     else {
-      return { 
-        statusCode: 400, 
-        body: JSON.stringify({ message: "Unknown action type" }) 
-      };
+      return { statusCode: 400, body: JSON.stringify({ message: "Invalid action." }) };
     }
 
-    // 5. 成功响应
+    // 3. 调用 Google Gemini API
+    const apiUrl = `${BASE_URL}/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildRequestBody(systemPrompt, schema))
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Google API Error:", response.status, errorText);
+      throw new Error(`AI Service Unavailable: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!resultText) {
+      throw new Error("Empty response from AI.");
+    }
+
+    // 4. 处理返回数据
+    let responseBody = {};
+    if (action === 'clarify_questions') {
+      try {
+        // 尝试解析 JSON (虽然使用了 responseSchema，但多一层 try-catch 更安全)
+        responseBody = JSON.parse(resultText);
+      } catch (e) {
+        console.error("JSON Parse Error:", resultText);
+        throw new Error("Failed to parse AI response.");
+      }
+    } else {
+      responseBody = { result: resultText.trim() };
+    }
+
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(resultJson || { result: resultText })
+      body: JSON.stringify(responseBody)
     };
 
   } catch (error) {
-    console.error("Function Execution Error:", error);
-    
-    // 区分系统错误和业务错误
-    const statusCode = error.message.includes("Google API Error") ? 502 : 400;
-    
+    console.error("Handler Error:", error);
     return {
-      statusCode: statusCode,
+      statusCode: 502, // Bad Gateway (upstream error)
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: error.message || "Internal Server Error" })
     };
