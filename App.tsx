@@ -253,6 +253,21 @@ const App: React.FC = () => {
               onChange={(e) => setInput(e.target.value)}
               disabled={isBusy || (status === AppStatus.AWAITING_INPUT)}
             />
+
+            {/* Loading Overlay */}
+            {isBusy && (
+              <div className="absolute inset-0 bg-white/40 backdrop-blur-md rounded-3xl flex flex-col items-center justify-center border border-white/30 transition-all animate-fade-in z-20">
+                <div className="relative mb-3">
+                  <div className="w-12 h-12 border-4 border-slate-200/50 border-t-slate-600 rounded-full animate-spin"></div>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Sparkles size={16} className="text-slate-600 animate-pulse opacity-75" />
+                  </div>
+                </div>
+                <span className="text-sm font-medium text-slate-700 tracking-wide animate-pulse">
+                  {status === AppStatus.GENERATING_QUESTIONS ? '正在深入分析...' : '正在精心优化...'}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end pt-2 items-center gap-4">
