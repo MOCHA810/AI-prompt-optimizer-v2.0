@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Copy, Check, ArrowRight, RefreshCw, Sparkles, AlertTriangle } from 'lucide-react';
+import { Copy, Check, ArrowRight, RefreshCw, Sparkles } from 'lucide-react';
 import { AppMode, AppStatus, ClarificationQuestion } from './types';
 import { generateFastPrompt, generateClarificationQuestions, generateFinalClarifiedPrompt } from './services/geminiService';
 import GlassButton from './components/GlassButton';
 import ModeToggle from './components/ModeToggle';
-import ApiKeyConfig from './components/ApiKeyConfig';
 
-// --- Sub-Components to keep Main Render Clean ---
+// --- Sub-Components ---
 
 const ClarificationView: React.FC<{
   questions: ClarificationQuestion[];
@@ -113,7 +112,6 @@ const ResultView: React.FC<{
 
 const App: React.FC = () => {
   // State
-  const [apiKey, setApiKey] = useState<string>('');
   const [mode, setMode] = useState<AppMode>(AppMode.FAST);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -146,10 +144,6 @@ const App: React.FC = () => {
 
   const handleGenerate = async () => {
     if (!input.trim()) return;
-    if (!apiKey) {
-      setError("请先在下方配置 Google API Key");
-      return;
-    }
 
     setError(null);
     setResult('');
@@ -158,53 +152,23 @@ const App: React.FC = () => {
     try {
       if (mode === AppMode.FAST) {
         setStatus(AppStatus.GENERATING_RESULT);
-        const prompt = await generateFastPrompt(input, apiKey);
+        const prompt = await generateFastPrompt(input);
         setResult(prompt);
         setStatus(AppStatus.COMPLETED);
       } else {
         setStatus(AppStatus.GENERATING_QUESTIONS);
-        const generatedQuestions = await generateClarificationQuestions(input, apiKey);
+        const generatedQuestions = await generateClarificationQuestions(input);
         setQuestions(generatedQuestions);
         setStatus(AppStatus.AWAITING_INPUT);
       }
     } catch (err: any) {
       console.error(err);
-      
-      let rawMsg = err.message || "";
-      let userMsg = "出错了，请稍后重试。";
-
-      // 尝试解析结构化错误
-      try {
-        const errorObj = JSON.parse(rawMsg);
-        if (errorObj.message) rawMsg = errorObj.message;
-        if (errorObj.status === 404) {
-          rawMsg = "Model not found";
-        }
-      } catch (e) {
-        // ignore
-      }
-
-      const lowerMsg = rawMsg.toLowerCase();
-
-      if (lowerMsg.includes('api key') || lowerMsg.includes('403') || lowerMsg.includes('key not valid')) {
-        userMsg = "API Key 无效或受限。请检查 Key 是否正确，或是否设置了 Referrer 限制。";
-      } else if (lowerMsg.includes('not found') || lowerMsg.includes('404')) {
-        userMsg = "请求的模型不可用 (404)。可能是该模型在您所在的地区尚未开放。";
-      } else if (rawMsg) {
-        userMsg = `请求出错: ${rawMsg}`;
-      }
-
-      setError(userMsg);
+      setError(err.message || "服务器繁忙，请稍后重试。");
       setStatus(AppStatus.ERROR);
     }
   };
 
   const handleClarificationSubmit = async () => {
-    if (!apiKey) {
-      setError("API Key 丢失，请重新配置");
-      return;
-    }
-    
     try {
       setStatus(AppStatus.GENERATING_RESULT);
       
@@ -213,12 +177,12 @@ const App: React.FC = () => {
         answer: answers[q.id] || q.options[0].value
       }));
 
-      const finalPrompt = await generateFinalClarifiedPrompt(input, qaPairs, apiKey);
+      const finalPrompt = await generateFinalClarifiedPrompt(input, qaPairs);
       setResult(finalPrompt);
       setStatus(AppStatus.COMPLETED);
     } catch (err: any) {
       console.error(err);
-      setError(`生成最终指令失败: ${err.message || '未知错误'}`);
+      setError(`优化失败: ${err.message || '请重试'}`);
       setStatus(AppStatus.ERROR);
     }
   };
@@ -292,19 +256,11 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex justify-end pt-2 items-center gap-4">
-            {!apiKey && (
-               <span className="text-xs text-amber-600/80 font-medium flex items-center gap-1.5 px-3 py-1 bg-amber-50/50 rounded-full border border-amber-100/50">
-                 <AlertTriangle size={12} />
-                 请先配置 API Key
-               </span>
-            )}
-
             {status === AppStatus.IDLE || status === AppStatus.COMPLETED || status === AppStatus.ERROR ? (
               <GlassButton 
                 onClick={handleGenerate} 
-                disabled={!input.trim() || !apiKey}
+                disabled={!input.trim()}
                 isLoading={isBusy}
-                className={!apiKey ? 'opacity-50 grayscale cursor-not-allowed' : ''}
               >
                 {status === AppStatus.COMPLETED ? '再次优化' : '生成指令'}
                 {status !== AppStatus.COMPLETED && <ArrowRight size={16} />}
@@ -345,10 +301,6 @@ const App: React.FC = () => {
         )}
 
       </main>
-
-      <div className="w-full max-w-3xl px-4 sm:px-10 mb-8 z-10">
-        <ApiKeyConfig onApiKeyChange={setApiKey} />
-      </div>
 
       <footer className="text-center text-slate-400 text-xs pb-12">
         <p>由 Gemini 驱动。为清晰而设计。</p>
