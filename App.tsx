@@ -43,7 +43,7 @@ const App: React.FC = () => {
   const handleGenerate = async () => {
     if (!input.trim()) return;
     if (!apiKey) {
-      setError("请先配置 Google API Key");
+      setError("请先在下方配置 Google API Key");
       return;
     }
 
@@ -130,9 +130,9 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8 selection:bg-slate-200 text-slate-800">
       
       {/* Main Glass Container - Using bg-glass-surface from config but ensuring overrides if needed for extra transparency */}
-      <main className="w-full max-w-3xl bg-glass-surface backdrop-blur-2xl border border-glass-border shadow-glass rounded-[40px] p-6 sm:p-10 transition-all duration-500">
+      <main className="w-full max-w-3xl bg-glass-surface backdrop-blur-2xl border border-glass-border shadow-glass rounded-[40px] p-6 sm:p-10 transition-all duration-500 mb-8">
         
-        {/* Header Section including API Config */}
+        {/* Header Section */}
         <div className="flex flex-col items-center mb-8 text-center relative z-10">
           {/* Logo */}
           <div className="w-12 h-12 bg-gradient-to-tr from-slate-100 to-white/40 rounded-2xl shadow-sm border border-white/30 flex items-center justify-center mb-6 backdrop-blur-md">
@@ -140,10 +140,7 @@ const App: React.FC = () => {
           </div>
           
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 mb-2">优化你的想法</h1>
-          <p className="text-slate-500 font-normal mb-8">将零散的想法转化为精准的 AI 指令。</p>
-
-          {/* API Config Module */}
-          <ApiKeyConfig onApiKeyChange={setApiKey} />
+          <p className="text-slate-500 font-normal">将零散的想法转化为精准的 AI 指令。</p>
         </div>
 
         {/* Mode Toggle */}
@@ -176,7 +173,7 @@ const App: React.FC = () => {
             {!apiKey && (
                <span className="text-xs text-amber-600/80 font-medium flex items-center gap-1.5 px-3 py-1 bg-amber-50/50 rounded-full border border-amber-100/50">
                  <AlertTriangle size={12} />
-                 请先输入 API Key
+                 请先配置 API Key
                </span>
             )}
 
@@ -290,8 +287,13 @@ const App: React.FC = () => {
 
       </main>
 
+      {/* API Config Module - Moved to Bottom */}
+      <div className="w-full max-w-3xl px-4 sm:px-10 mb-8 z-10">
+        <ApiKeyConfig onApiKeyChange={setApiKey} />
+      </div>
+
       {/* Footer */}
-      <footer className="mt-12 text-center text-slate-400 text-xs">
+      <footer className="text-center text-slate-400 text-xs pb-12">
         <p>由 Gemini 驱动。为清晰而设计。</p>
       </footer>
     </div>
