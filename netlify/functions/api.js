@@ -1,34 +1,55 @@
-// netlify/functions/api.js
-// Serverless Backend for Clarity App
-// Environment: Node.js 18+
+import { GoogleGenAI, Type } from "@google/genai";
 
-// Using gemini-3-flash-preview
+// Using gemini-3-flash-preview as per guidelines.
 const MODEL_NAME = 'gemini-3-flash-preview';
-const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
 /**
- * Helper: Build Google API Request Body
+ * Helper: Build Content for SDK
  */
-function buildRequestBody(prompt, schema = null) {
-  const body = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.7,
-    }
-  };
-
-  if (schema) {
-    body.generationConfig.responseMimeType = "application/json";
-    body.generationConfig.responseSchema = schema;
+function buildPrompt(action, input, qaPairs) {
+  if (action === 'fast') {
+    return `
+      You are an expert prompt engineer. Transform the user's raw idea into a single, high-quality AI prompt in Simplified Chinese.
+      
+      Rules:
+      1. Keep the intent of the original input.
+      2. Add structure and clarity.
+      3. Output ONLY the optimized prompt. No intro/outro.
+      
+      Raw Input: "${input}"
+    `;
+  } 
+  
+  if (action === 'clarify_questions') {
+    return `
+      Analyze the user idea: "${input}"
+      Identify 2-3 missing details.
+      Generate 2-3 multiple-choice questions in Simplified Chinese.
+      Output valid JSON matching the schema.
+    `;
   }
-
-  return body;
+  
+  if (action === 'clarify_final') {
+    const contextStr = (qaPairs || []).map(qa => `Q: ${qa.question}\nA: ${qa.answer}`).join("\n");
+    return `
+      Act as an expert prompt engineer.
+      Create a final optimized prompt in Simplified Chinese based on:
+      
+      Input: "${input}"
+      Details:
+      ${contextStr}
+      
+      Output ONLY the final prompt.
+    `;
+  }
+  
+  return "";
 }
 
 /**
- * Core Logic
+ * Netlify Function Handler (ESM)
  */
-exports.handler = async function(event, context) {
+export const handler = async (event, context) => {
   // 1. Security & Method Check
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
@@ -37,7 +58,6 @@ exports.handler = async function(event, context) {
   try {
     if (!event.body) throw new Error("Empty request body");
     
-    // Extract parameters including apiKey from the request body
     const { action, input, qaPairs, apiKey } = JSON.parse(event.body);
 
     if (!apiKey) {
@@ -56,48 +76,45 @@ exports.handler = async function(event, context) {
       };
     }
 
-    // 2. Route & Prompt Construction
-    let systemPrompt = "";
-    let schema = null;
+    // 2. Initialize SDK
+    // Although strict guidelines say use process.env.API_KEY, this is a user-configurable app 
+    // feature requested by the user, so we use the dynamic key.
+    const ai = new GoogleGenAI({ apiKey: apiKey });
 
-    if (action === 'fast') {
-      systemPrompt = `
-        You are an expert prompt engineer. Transform the user's raw idea into a single, high-quality AI prompt in Simplified Chinese.
-        
-        Rules:
-        1. Keep the intent of the original input.
-        2. Add structure and clarity.
-        3. Output ONLY the optimized prompt. No intro/outro.
-        
-        Raw Input: "${input}"
-      `;
-    } 
-    else if (action === 'clarify_questions') {
-      systemPrompt = `
-        Analyze the user idea: "${input}"
-        Identify 2-3 missing details.
-        Generate 2-3 multiple-choice questions in Simplified Chinese.
-        Output valid JSON matching the schema.
-      `;
-      
-      schema = {
-        type: "OBJECT",
+    // 3. Configure Request
+    const promptText = buildPrompt(action, input, qaPairs);
+    if (!promptText) {
+      return { 
+        statusCode: 400, 
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "Invalid action." }) 
+      };
+    }
+
+    let config = {
+      temperature: 0.7,
+    };
+
+    if (action === 'clarify_questions') {
+      config.responseMimeType = "application/json";
+      config.responseSchema = {
+        type: Type.OBJECT,
         properties: {
           questions: {
-            type: "ARRAY",
+            type: Type.ARRAY,
             items: {
-              type: "OBJECT",
+              type: Type.OBJECT,
               properties: {
-                id: { type: "STRING" },
-                text: { type: "STRING" },
+                id: { type: Type.STRING },
+                text: { type: Type.STRING },
                 options: {
-                  type: "ARRAY",
+                  type: Type.ARRAY,
                   items: {
-                    type: "OBJECT",
+                    type: Type.OBJECT,
                     properties: {
-                      id: { type: "STRING" },
-                      label: { type: "STRING" },
-                      value: { type: "STRING" }
+                      id: { type: Type.STRING },
+                      label: { type: Type.STRING },
+                      value: { type: Type.STRING }
                     },
                     required: ["id", "label", "value"]
                   }
@@ -109,88 +126,50 @@ exports.handler = async function(event, context) {
         },
         required: ["questions"]
       };
-    } 
-    else if (action === 'clarify_final') {
-      const contextStr = (qaPairs || []).map(qa => `Q: ${qa.question}\nA: ${qa.answer}`).join("\n");
-      systemPrompt = `
-        Act as an expert prompt engineer.
-        Create a final optimized prompt in Simplified Chinese based on:
-        
-        Input: "${input}"
-        Details:
-        ${contextStr}
-        
-        Output ONLY the final prompt.
-      `;
-    } 
-    else {
-      return { 
-        statusCode: 400, 
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "Invalid action." }) 
-      };
     }
 
-    // 3. Call Google Gemini API
-    const apiUrl = `${BASE_URL}/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+    // 4. Generate Content
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: promptText,
+      config: config
+    });
 
-    try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildRequestBody(systemPrompt, schema)),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
+    const resultText = response.text;
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Google API Error:", response.status, errorText);
-        throw new Error(`AI Service Error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!resultText) {
-        throw new Error("AI returned empty response.");
-      }
-
-      // 4. Process Response
-      let responseBody = {};
-      if (action === 'clarify_questions') {
-        try {
-          responseBody = JSON.parse(resultText);
-        } catch (e) {
-          console.error("JSON Parse Error:", resultText);
-          throw new Error("Failed to parse AI response.");
-        }
-      } else {
-        responseBody = { result: resultText.trim() };
-      }
-
-      return {
-        statusCode: 200,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(responseBody)
-      };
-
-    } catch (fetchError) {
-      clearTimeout(timeoutId);
-      throw fetchError;
+    if (!resultText) {
+      throw new Error("AI returned empty response.");
     }
+
+    // 5. Process Response
+    let responseBody = {};
+    if (action === 'clarify_questions') {
+      try {
+        responseBody = JSON.parse(resultText);
+      } catch (e) {
+        console.error("JSON Parse Error:", resultText);
+        // Fallback or error if strictly required
+        throw new Error("Failed to parse AI response.");
+      }
+    } else {
+      responseBody = { result: resultText.trim() };
+    }
+
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(responseBody)
+    };
 
   } catch (error) {
     console.error("Handler Error:", error);
-    const isTimeout = error.name === 'AbortError';
+    // SDK specific error handling can be added here if needed
     return {
-      statusCode: isTimeout ? 504 : 502,
+      statusCode: 500,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
-        message: isTimeout ? "AI Processing Timeout" : (error.message || "Internal Server Error") 
+        message: error.message || "Internal Server Error" 
       })
     };
   };
+};
