@@ -1,49 +1,68 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
-// Using gemini-3-flash-preview as per guidelines.
-const MODEL_NAME = 'gemini-3-flash-preview';
+const API_ENDPOINT = "https://api.deepseek.com/chat/completions";
+const MODEL_NAME = "deepseek-chat";
 
 /**
- * Helper: Build Content for SDK
+ * Helper: Build Messages for OpenAI/DeepSeek Format
  */
-function buildPrompt(action, input, qaPairs) {
+function buildMessages(action, input, qaPairs) {
   if (action === 'fast') {
-    return `
-      You are an expert prompt engineer. Transform the user's raw idea into a single, high-quality AI prompt in Simplified Chinese.
-      
-      Rules:
-      1. Keep the intent of the original input.
-      2. Add structure and clarity.
-      3. Output ONLY the optimized prompt. No intro/outro.
-      
-      Raw Input: "${input}"
-    `;
+    return [
+      {
+        role: "system",
+        content: `You are an expert prompt engineer. Transform the user's raw idea into a single, high-quality AI prompt in Simplified Chinese.
+Rules:
+1. Keep the intent of the original input.
+2. Add structure and clarity.
+3. Output ONLY the optimized prompt. No intro/outro.`
+      },
+      {
+        role: "user",
+        content: `Raw Input: "${input}"`
+      }
+    ];
   } 
   
   if (action === 'clarify_questions') {
-    return `
-      Analyze the user idea: "${input}"
-      Identify 2-3 missing details.
-      Generate 2-3 multiple-choice questions in Simplified Chinese.
-      Output valid JSON matching the schema.
-    `;
+    return [
+      {
+        role: "system",
+        content: `You are a helpful assistant. Analyze the user idea and identify 2-3 missing details. 
+Generate 2-3 multiple-choice questions in Simplified Chinese to clarify these details.
+IMPORTANT: You must output ONLY valid JSON matching this structure:
+{
+  "questions": [
+    {
+      "id": "q1",
+      "text": "Question text here",
+      "options": [
+        { "id": "o1", "label": "Option label", "value": "Option value for prompt" }
+      ]
+    }
+  ]
+}`
+      },
+      {
+        role: "user",
+        content: `User idea: "${input}"`
+      }
+    ];
   }
   
   if (action === 'clarify_final') {
     const contextStr = (qaPairs || []).map(qa => `Q: ${qa.question}\nA: ${qa.answer}`).join("\n");
-    return `
-      Act as an expert prompt engineer.
-      Create a final optimized prompt in Simplified Chinese based on:
-      
-      Input: "${input}"
-      Details:
-      ${contextStr}
-      
-      Output ONLY the final prompt.
-    `;
+    return [
+      {
+        role: "system",
+        content: "You are an expert prompt engineer. Create a final optimized prompt in Simplified Chinese based on the user input and clarified details. Output ONLY the final prompt."
+      },
+      {
+        role: "user",
+        content: `Input: "${input}"\n\nClarified Details:\n${contextStr}`
+      }
+    ];
   }
   
-  return "";
+  return [];
 }
 
 /**
@@ -58,8 +77,6 @@ export const handler = async (event, context) => {
   try {
     if (!event.body) throw new Error("Empty request body");
     
-    console.log("Processing request...");
-
     const { action, input, qaPairs, apiKey } = JSON.parse(event.body);
 
     if (!apiKey) {
@@ -78,12 +95,9 @@ export const handler = async (event, context) => {
       };
     }
 
-    // 2. Initialize SDK
-    const ai = new GoogleGenAI({ apiKey: apiKey });
-
-    // 3. Configure Request
-    const promptText = buildPrompt(action, input, qaPairs);
-    if (!promptText) {
+    // 2. Build Messages
+    const messages = buildMessages(action, input, qaPairs);
+    if (!messages.length) {
       return { 
         statusCode: 400, 
         headers: { "Content-Type": "application/json" },
@@ -91,97 +105,91 @@ export const handler = async (event, context) => {
       };
     }
 
-    let config = {
-      temperature: 0.7,
-    };
+    // 3. Prepare DeepSeek API Request
+    const isJsonMode = action === 'clarify_questions';
+    
+    console.log(`Calling DeepSeek: ${MODEL_NAME}, Action: ${action}`);
 
-    if (action === 'clarify_questions') {
-      config.responseMimeType = "application/json";
-      config.responseSchema = {
-        type: Type.OBJECT,
-        properties: {
-          questions: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                text: { type: Type.STRING },
-                options: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      label: { type: Type.STRING },
-                      value: { type: Type.STRING }
-                    },
-                    required: ["id", "label", "value"]
-                  }
-                }
-              },
-              required: ["id", "text", "options"]
-            }
-          }
+    // Netlify functions timeout at 10s. We race against 9s.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 9000);
+
+    try {
+      const response = await fetch(API_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
         },
-        required: ["questions"]
-      };
-    }
+        body: JSON.stringify({
+          model: MODEL_NAME,
+          messages: messages,
+          temperature: 1.2, // DeepSeek recommends slightly higher temp
+          response_format: isJsonMode ? { type: "json_object" } : { type: "text" },
+          stream: false
+        }),
+        signal: controller.signal
+      });
 
-    console.log(`Calling Model: ${MODEL_NAME}, Action: ${action}`);
+      clearTimeout(timeoutId);
 
-    // 4. Generate Content with Time Limit
-    // Netlify functions timeout at 10s. We MUST exit before that to avoid 502 Bad Gateway.
-    // We race the API call against a 9s timeout.
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("Function Execution Timed Out (9s limit)")), 9000)
-    );
-
-    const apiCall = ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: [{ parts: [{ text: promptText }] }], // Explicit structure
-      config: config
-    });
-
-    // Race the API call against the timeout
-    const response = await Promise.race([apiCall, timeoutPromise]);
-
-    const resultText = response.text;
-
-    if (!resultText) {
-      throw new Error("AI returned empty response.");
-    }
-
-    // 5. Process Response
-    let responseBody = {};
-    if (action === 'clarify_questions') {
-      try {
-        responseBody = JSON.parse(resultText);
-      } catch (e) {
-        console.error("JSON Parse Error:", resultText);
-        throw new Error("Failed to parse AI response.");
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error("DeepSeek API Error:", errText);
+        throw new Error(`DeepSeek API Error: ${response.status}`);
       }
-    } else {
-      responseBody = { result: resultText.trim() };
-    }
 
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(responseBody)
-    };
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+
+      if (!content) {
+        throw new Error("DeepSeek returned empty content.");
+      }
+
+      // 4. Process Response to match Frontend Expectations
+      let responseBody = {};
+      
+      if (isJsonMode) {
+        try {
+          // DeepSeek sometimes wraps JSON in markdown blocks like ```json ... ```
+          // We need to clean it just in case, though response_format: json_object usually handles it.
+          const cleanJson = content.replace(/```json\n?|```/g, '').trim();
+          responseBody = JSON.parse(cleanJson);
+          
+          // Validate basic structure
+          if (!responseBody.questions || !Array.isArray(responseBody.questions)) {
+             throw new Error("Invalid JSON structure from AI");
+          }
+        } catch (e) {
+          console.error("JSON Parse Error:", content);
+          throw new Error("Failed to parse AI response as JSON.");
+        }
+      } else {
+        responseBody = { result: content.trim() };
+      }
+
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(responseBody)
+      };
+
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      throw fetchError;
+    }
 
   } catch (error) {
     console.error("Handler Failure:", error);
     
-    // Distinguish between timeout (504) and other errors (500)
-    const isTimeout = error.message && error.message.includes("Timed Out");
+    // Distinguish between timeout (AbortError) and other errors
+    const isTimeout = error.name === 'AbortError' || (error.message && error.message.includes("Timed Out"));
     
     return {
       statusCode: isTimeout ? 504 : 500,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
-        message: error.message || "Internal Server Error" 
+        message: isTimeout ? "Request timed out (DeepSeek is busy)" : (error.message || "Internal Server Error") 
       })
     };
   };
