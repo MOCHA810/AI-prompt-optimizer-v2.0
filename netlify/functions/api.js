@@ -58,6 +58,8 @@ export const handler = async (event, context) => {
   try {
     if (!event.body) throw new Error("Empty request body");
     
+    console.log("Processing request...");
+
     const { action, input, qaPairs, apiKey } = JSON.parse(event.body);
 
     if (!apiKey) {
@@ -77,8 +79,6 @@ export const handler = async (event, context) => {
     }
 
     // 2. Initialize SDK
-    // Although strict guidelines say use process.env.API_KEY, this is a user-configurable app 
-    // feature requested by the user, so we use the dynamic key.
     const ai = new GoogleGenAI({ apiKey: apiKey });
 
     // 3. Configure Request
@@ -128,12 +128,23 @@ export const handler = async (event, context) => {
       };
     }
 
-    // 4. Generate Content
-    const response = await ai.models.generateContent({
+    console.log(`Calling Model: ${MODEL_NAME}, Action: ${action}`);
+
+    // 4. Generate Content with Time Limit
+    // Netlify functions timeout at 10s. We MUST exit before that to avoid 502 Bad Gateway.
+    // We race the API call against a 9s timeout.
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("Function Execution Timed Out (9s limit)")), 9000)
+    );
+
+    const apiCall = ai.models.generateContent({
       model: MODEL_NAME,
-      contents: promptText,
+      contents: [{ parts: [{ text: promptText }] }], // Explicit structure
       config: config
     });
+
+    // Race the API call against the timeout
+    const response = await Promise.race([apiCall, timeoutPromise]);
 
     const resultText = response.text;
 
@@ -148,7 +159,6 @@ export const handler = async (event, context) => {
         responseBody = JSON.parse(resultText);
       } catch (e) {
         console.error("JSON Parse Error:", resultText);
-        // Fallback or error if strictly required
         throw new Error("Failed to parse AI response.");
       }
     } else {
@@ -162,10 +172,13 @@ export const handler = async (event, context) => {
     };
 
   } catch (error) {
-    console.error("Handler Error:", error);
-    // SDK specific error handling can be added here if needed
+    console.error("Handler Failure:", error);
+    
+    // Distinguish between timeout (504) and other errors (500)
+    const isTimeout = error.message && error.message.includes("Timed Out");
+    
     return {
-      statusCode: 500,
+      statusCode: isTimeout ? 504 : 500,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
         message: error.message || "Internal Server Error" 
