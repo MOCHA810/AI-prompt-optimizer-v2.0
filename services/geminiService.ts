@@ -3,6 +3,8 @@ import { ClarificationQuestion } from "../types";
 // Netlify Function Endpoint
 const BACKEND_URL = "/.netlify/functions/api";
 
+const STORAGE_KEY = 'clarity_gemini_key';
+
 interface ApiError {
   message: string;
 }
@@ -12,18 +14,26 @@ interface ApiError {
  * Handles communication with the Netlify backend.
  */
 async function postToBackend<T>(payload: object): Promise<T> {
+  const apiKey = localStorage.getItem(STORAGE_KEY);
+  
+  if (!apiKey) {
+    throw new Error("请先点击右上角设置您的 Gemini API Key");
+  }
+
   const controller = new AbortController();
-  // Set 20s timeout for frontend request (slightly longer than backend timeout)
   const id = setTimeout(() => controller.abort(), 20000);
 
   try {
+    // We include the apiKey in the payload
+    const finalPayload = { ...payload, apiKey };
+
     const response = await fetch(BACKEND_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache' 
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(finalPayload),
       signal: controller.signal
     });
     clearTimeout(id);

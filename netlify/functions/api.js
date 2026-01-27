@@ -1,9 +1,8 @@
 // netlify/functions/api.js
 // Serverless Backend for Clarity App
 // Environment: Node.js 18+
-// Env Vars Required: API_KEY
 
-// Using gemini-3-flash-preview as per guidelines.
+// Using gemini-3-flash-preview
 const MODEL_NAME = 'gemini-3-flash-preview';
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -18,7 +17,6 @@ function buildRequestBody(prompt, schema = null) {
     }
   };
 
-  // Only set responseMimeType if we strictly need JSON.
   if (schema) {
     body.generationConfig.responseMimeType = "application/json";
     body.generationConfig.responseSchema = schema;
@@ -36,20 +34,19 @@ exports.handler = async function(event, context) {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    console.error("Critical: API_KEY is missing in server environment.");
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "Server configuration error (Missing API Key)." })
-    };
-  }
-
   try {
-    // Parse Body
     if (!event.body) throw new Error("Empty request body");
-    const { action, input, qaPairs } = JSON.parse(event.body);
+    
+    // Extract parameters including apiKey from the request body
+    const { action, input, qaPairs, apiKey } = JSON.parse(event.body);
+
+    if (!apiKey) {
+      return {
+        statusCode: 401,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "API Key is missing. Please set it in the app settings." })
+      };
+    }
 
     if (!input || typeof input !== 'string') {
       return { 
@@ -137,7 +134,6 @@ exports.handler = async function(event, context) {
     // 3. Call Google Gemini API
     const apiUrl = `${BASE_URL}/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
     
-    // Set a timeout for the upstream request to avoid Netlify function timeout hanging
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
 

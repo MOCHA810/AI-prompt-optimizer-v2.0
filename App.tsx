@@ -4,6 +4,7 @@ import { AppMode, AppStatus, ClarificationQuestion } from './types';
 import { generateFastPrompt, generateClarificationQuestions, generateFinalClarifiedPrompt } from './services/geminiService';
 import GlassButton from './components/GlassButton';
 import ModeToggle from './components/ModeToggle';
+import ApiKeyConfig from './components/ApiKeyConfig';
 
 // --- Sub-Components ---
 
@@ -222,7 +223,10 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8 selection:bg-slate-200 text-slate-800">
       
-      <main className="w-full max-w-3xl bg-glass-surface backdrop-blur-2xl border border-glass-border shadow-glass rounded-[40px] p-6 sm:p-10 transition-all duration-500 mb-8">
+      {/* API Key Configuration */}
+      <ApiKeyConfig />
+
+      <main className="w-full max-w-3xl bg-glass-surface backdrop-blur-2xl border border-glass-border shadow-glass rounded-[40px] p-6 sm:p-10 transition-all duration-500 mb-8 mt-12">
         
         {/* Header */}
         <div className="flex flex-col items-center mb-8 text-center relative z-10">
